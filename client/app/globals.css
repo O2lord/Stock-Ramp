@@ -1,0 +1,123 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Stock Ramp — "Terminal" theme.
+ *
+ * Direction chosen from client/public/design-preview.html (option C): true
+ * black canvas, hairline borders, near-square corners, a single hot orange
+ * accent, and dedicated up/down colors for price action.
+ *
+ * THIS FILE IS THE ONLY PLACE COLORS ARE DEFINED. Components must consume
+ * the semantic tokens below (`bg-background`, `text-foreground`,
+ * `border-border`, `bg-surface-1`, `text-up`, ...) and must NOT hardcode
+ * hex values — the previous pass did exactly that (`bg-[#F5F0E8]` in
+ * card.tsx, `bg-[#EDE8DF]` in GlobalStatsTicker.tsx, inline
+ * `style={{ background: "#0F0D0A" }}`, etc.), which is why the old theme
+ * rendered cream cards and cream bands on a dark page regardless of which
+ * theme was active. If you need a new color, add a token here.
+ *
+ * Elevation model — three steps, ordinal is absolute lightness in BOTH
+ * modes so components don't need per-mode branches:
+ *   --background  page canvas        (black in dark, white in light)
+ *   --surface-1   in-flow card / row
+ *   --surface-2   raised: popover, dialog, active tab, input
+ */
+@layer base {
+  :root {
+    /* Light — paper. Same accent, inverted neutrals. */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 4%;
+
+    --surface-1: 0 0% 98%;
+    --surface-2: 0 0% 100%;
+
+    --card: 0 0% 98%;
+    --card-foreground: 0 0% 4%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 4%;
+
+    --primary: 18 100% 50%;        /* #FF4D00 */
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 18 100% 44%;
+
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 4%;
+
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 42%;
+
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 4%;
+
+    --destructive: 356 78% 48%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Price action — never reuse primary for these, the orange already
+       means "action" and a falling price is not an action. */
+    --up: 160 100% 30%;
+    --down: 356 84% 50%;
+
+    --border: 0 0% 89%;
+    --border-strong: 0 0% 78%;
+    --input: 0 0% 89%;
+    --ring: 18 100% 50%;
+
+    /* Terminal: near-square. 2px reads as "cut", not "rounded". */
+    --radius: 2px;
+  }
+
+  .dark {
+    --background: 0 0% 0%;         /* true black */
+    --foreground: 0 0% 98%;        /* #FAFAFA */
+
+    --surface-1: 0 0% 5%;          /* #0C0C0C */
+    --surface-2: 0 0% 9%;          /* #171717 */
+
+    --card: 0 0% 5%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 18 100% 50%;
+    --primary-foreground: 0 0% 0%; /* black on orange — orange is bright */
+    --primary-hover: 18 100% 58%;
+
+    --secondary: 0 0% 9%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 0 0% 9%;
+    --muted-foreground: 0 0% 56%;  /* #8F8F8F */
+
+    --accent: 0 0% 9%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 356 100% 61%;
+    --destructive-foreground: 0 0% 0%;
+
+    --up: 160 100% 44%;            /* #00E08F */
+    --down: 356 100% 61%;          /* #FF3B47 */
+
+    --border: 0 0% 15%;
+    --border-strong: 0 0% 28%;
+    --input: 0 0% 15%;
+    --ring: 18 100% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv02", "cv03", "cv04";
+  }
+  /* Prices, amounts and counts should never reflow as digits change. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}

@@ -1,0 +1,483 @@
+<!--
+  reserveBuyOrderCard.html
+  ==========================
+  MCP App UI resource for reserve_buy_order AND prepare_stock_offramp
+  (registered under ui://stock-ramp/reserve-buy-order-card-v1 in
+  registerReserveBuyOrderApp.ts). This is the off-ramp card -- "sell my
+  AAPLx for naira" renders here.
+
+  Two-stage card (pending -> success): signing the reservation IS the
+  sale, no separate payment step. Subscribes to a Supabase Realtime push
+  on the receipts table, filtered on order + fiat amount + currency (no
+  taker wallet needed up front) -- same pattern Trust Vault's equivalent
+  card used, forked as-is since this logic is generic, not brand-specific.
+
+  Realtime filter column is `trust_express_address` -- confirmed against
+  discord-bot/bot.ts's actual receipt inserts, which never renamed this
+  column when the rest of the codebase moved to StockRamp naming.
+
+  SIGNER RESOLUTION: the taker wallet is the strong unique key for "this
+  reservation" (see receiptByOrder.ts), but it only exists on-chain AFTER
+  the QR is scanned and signed -- and this card renders BEFORE that. A
+  single resolveSigner() call at render time therefore always came back
+  null (findSignerByReference finds no signatures for a brand-new
+  reference key) and was never retried, so signerAddress stayed null for
+  the card's whole life and every match silently fell through to the
+  tolerant fiat-amount comparison. That fallback works, but it can
+  collide when several takers reserve into the same order for the same
+  amount. So resolveSigner() is now polled while the card is pending and
+  re-run at the top of "Check now", and stops as soon as a signer is
+  found, a receipt lands, or the poll budget runs out.
+
+  Ported from Trust Vault's reserveBuyOrderCard.html: renamed brand/URIs
+  only, plus an optional "priceDivergencePct" display when the tool result
+  came from prepare_stock_offramp rather than a direct reserve_buy_order
+  call against a known PDA.
+
+  PRIMARY ACTION BUTTON: on a phone, tapping "Copy reservation link" used
+  to copy checkoutPageUrl -- a link with nowhere useful to paste it, since
+  the actual next step is a wallet app opening the Solana Pay request.
+  Detects mobile (isMobileDevice) and, there, hands transactionRequestUrl
+  (the same "solana:..." URI encoded into the QR) straight to the OS via
+  openExternal's direct-navigation fallback, which triggers the native
+  "open with" wallet picker when more than one wallet app is installed.
+  Desktop now routes through the same openExternal() helper the receipt
+  link uses (try the host's app.openLink() capability first, then fall
+  back to clipboard) instead of a bare navigator.clipboard.writeText()
+  call -- that raw call throws silently in this widget's sandboxed iframe
+  when clipboard-write isn't permitted, which is why "Copy reservation
+  link" looked like it did nothing on desktop while "View full receipt"
+  (already on openExternal) worked fine.
+-->
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: transparent;
+        color: #f2f2f2;
+      }
+      .card {
+        max-width: 380px;
+        margin: 0 auto;
+        background: #17181c;
+        border: 1px solid #2a2b31;
+        border-radius: 16px;
+        padding: 20px;
+      }
+      .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      .brand { font-weight: 700; font-size: 15px; letter-spacing: 0.2px; }
+      .status-pill {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: #3a2f0f;
+        color: #f5c542;
+      }
+      .status-pill[data-state="success"] { background: #0f3a1c; color: #4ade80; }
+      .qr-wrap {
+        display: flex;
+        justify-content: center;
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .qr-wrap img { width: 220px; height: 220px; display: block; }
+      .amount { text-align: center; font-size: 32px; font-weight: 700; margin-bottom: 4px; }
+      .subamount { text-align: center; font-size: 13px; color: #9a9ba3; margin-bottom: 8px; }
+      .divergence {
+        text-align: center;
+        font-size: 11px;
+        color: #6a6b73;
+        margin-bottom: 18px;
+      }
+      .details {
+        border-top: 1px solid #2a2b31;
+        padding-top: 14px;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        row-gap: 8px;
+        column-gap: 16px;
+        font-size: 13px;
+      }
+      .details dt { color: #9a9ba3; }
+      .details dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+      .hint { margin-top: 12px; font-size: 12px; color: #9a9ba3; text-align: center; }
+      .actions { display: flex; gap: 8px; margin-top: 16px; }
+      button {
+        flex: 1;
+        border: 1px solid #2a2b31;
+        background: #1f2025;
+        color: #f2f2f2;
+        padding: 10px 12px;
+        border-radius: 10px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button:hover { background: #26272d; }
+      button[disabled] { opacity: 0.6; cursor: default; }
+      .receipt-link {
+        display: block;
+        width: 100%;
+        text-align: center;
+        margin-top: 14px;
+        font-size: 12px;
+        color: #7aa2f7;
+        text-decoration: none;
+        background: none;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+      }
+      .receipt-link:hover { text-decoration: underline; background: none; }
+      .receipt-link[hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="card-header">
+        <span class="brand">StockRamp</span>
+        <span class="status-pill" id="statusPill" data-state="pending">Scan to sell</span>
+      </div>
+
+      <div class="qr-wrap"><img id="qrImage" alt="Scan to sell" /></div>
+
+      <div class="amount" id="tokenLabel">—</div>
+      <div class="subamount" id="fiatLabel">—</div>
+      <div class="divergence" id="divergenceLabel" hidden></div>
+
+      <dl class="details">
+        <dt>Payout to</dt>
+        <dd id="beneficiary">—</dd>
+        <dt>Bank</dt>
+        <dd id="bank">—</dd>
+        <dt>Order</dt>
+        <dd id="order">—</dd>
+      </dl>
+
+      <p class="hint" id="hintText">
+        Scan with Phantom or Backpack to sign. This moves your tokens into
+        escrow immediately — fiat pays out to the account above automatically,
+        no extra step.
+      </p>
+
+      <div class="actions">
+        <button id="copyLinkBtn" type="button">Copy reservation link</button>
+        <button id="refreshBtn" type="button">Check now</button>
+      </div>
+
+      <button class="receipt-link" id="receiptLink" type="button" hidden>
+        View full receipt →
+      </button>
+    </div>
+
+    <script type="module">
+      import { App } from "https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps/+esm";
+
+      const app = new App({ name: "stock-ramp-reserve-buy-order-card", version: "1.0.0" });
+
+      let supabase = null;
+      let channel = null;
+
+      // Signer polling state. SIGNER_POLL_MS is deliberately slack --
+      // resolve_reserve_buy_order_signer costs two RPC round trips
+      // (getSignaturesForAddress + getTransaction), and nothing breaks if
+      // we're a few seconds late: the receipt match falls back to the
+      // tolerant amount comparison in the meantime.
+      const SIGNER_POLL_MS = 5000;
+      const SIGNER_POLL_BUDGET_MS = 20 * 60 * 1000;
+      let signerPollTimer = null;
+      let signerPollStartedAt = 0;
+      let settled = false;
+      let resolvingSigner = null;
+
+      async function ensureSupabase() {
+        if (supabase) return supabase;
+        const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm");
+        const state = window.__sellState;
+        if (state?.supabaseUrl && state?.supabaseAnonKey) {
+          supabase = createClient(state.supabaseUrl, state.supabaseAnonKey);
+        }
+        return supabase;
+      }
+
+      function setStatus(state, label) {
+        const pill = document.getElementById("statusPill");
+        pill.dataset.state = state;
+        pill.textContent = label;
+      }
+
+      function render(data) {
+        if (!data) return;
+        window.__sellState = data;
+
+        document.getElementById("qrImage").src = data.qrCodeDataUri ?? "";
+        document.getElementById("tokenLabel").textContent = data.tokenAmount
+          ? `${data.tokenAmount} ${data.symbol ?? "token"}${data.tokenAmount === 1 ? "" : "s"}`
+          : "—";
+        document.getElementById("fiatLabel").textContent =
+          data.fiatAmount && data.currency ? `≈ ${data.currency} ${data.fiatAmount}` : "—";
+
+        const divEl = document.getElementById("divergenceLabel");
+        if (typeof data.priceDivergencePct === "number") {
+          const sign = data.priceDivergencePct > 0 ? "+" : "";
+          divEl.textContent = `Order price is ${sign}${data.priceDivergencePct}% vs live market reference`;
+          divEl.hidden = false;
+        } else {
+          divEl.hidden = true;
+        }
+
+        document.getElementById("beneficiary").textContent = data.payoutDetails?.beneficiaryName ?? "—";
+        document.getElementById("bank").textContent = data.payoutDetails?.bankName ?? "—";
+        document.getElementById("order").textContent = data.orderAddress
+          ? `${data.orderAddress.slice(0, 4)}…${data.orderAddress.slice(-4)}`
+          : "—";
+
+        subscribeToReceipt(data.orderAddress);
+        // This first call is expected to come back null -- nothing has been
+        // signed yet at render time. The poll below is what actually lands
+        // the signer, once the user scans.
+        resolveSigner();
+        startSignerPolling();
+      }
+
+      /**
+       * Resolves the wallet that signed this reservation, via the Solana Pay
+       * reference key. Returns the signer (or null), and caches it on
+       * window.__sellState.signerAddress. Safe to call repeatedly: it no-ops
+       * once a signer is known, and in-flight calls are shared so a "Check
+       * now" click during a poll tick doesn't fire a second lookup.
+       */
+      async function resolveSigner() {
+        const state = window.__sellState;
+        if (!state?.reference) return null;
+        if (state.signerAddress) return state.signerAddress;
+        if (resolvingSigner) return resolvingSigner;
+
+        resolvingSigner = (async () => {
+          try {
+            const response = await app.callServerTool({
+              name: "resolve_reserve_buy_order_signer",
+              arguments: { reference: state.reference },
+            });
+            const signer = response?.structuredContent?.signer ?? null;
+            if (signer) {
+              state.signerAddress = signer;
+              stopSignerPolling();
+            }
+            return signer;
+          } catch (err) {
+            console.warn("resolve_reserve_buy_order_signer failed", err);
+            return null;
+          } finally {
+            resolvingSigner = null;
+          }
+        })();
+
+        return resolvingSigner;
+      }
+
+      function startSignerPolling() {
+        if (signerPollTimer || settled) return;
+        const state = window.__sellState;
+        if (!state?.reference || state.signerAddress) return;
+
+        signerPollStartedAt = Date.now();
+        signerPollTimer = setInterval(async () => {
+          if (settled || window.__sellState?.signerAddress) {
+            stopSignerPolling();
+            return;
+          }
+          if (Date.now() - signerPollStartedAt > SIGNER_POLL_BUDGET_MS) {
+            stopSignerPolling();
+            return;
+          }
+          await resolveSigner();
+        }, SIGNER_POLL_MS);
+      }
+
+      function stopSignerPolling() {
+        if (!signerPollTimer) return;
+        clearInterval(signerPollTimer);
+        signerPollTimer = null;
+      }
+
+      function showReceipt(row) {
+        settled = true;
+        stopSignerPolling();
+        setStatus("success", "✅ Paid out");
+        document.getElementById("hintText").textContent =
+          "Sale confirmed. Fiat has been sent to your bank account.";
+
+        const refreshBtn = document.getElementById("refreshBtn");
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = "Settled";
+
+        const link = document.getElementById("receiptLink");
+        const base = window.__sellState?.publicBaseUrl;
+        if (base && row?.id) {
+          link.dataset.receiptUrl = `${base.replace(/\/$/, "")}/receipts/${row.id}`;
+          link.hidden = false;
+        }
+        if (channel) supabase.removeChannel(channel);
+      }
+
+      async function subscribeToReceipt(orderAddress) {
+        if (!orderAddress || channel) return;
+        const client = await ensureSupabase();
+        if (!client) return;
+
+        channel = client
+          .channel(`sell-receipt-insert-${orderAddress}`)
+          .on(
+            "postgres_changes",
+            { event: "INSERT", schema: "public", table: "receipts", filter: `trust_express_address=eq.${orderAddress}` },
+            (payload) => {
+              const state = window.__sellState;
+              // Prefer matching on the resolved signer wallet when we have
+              // one -- it's a strong unique key for "this reservation" and
+              // avoids the float-vs-rounded-integer mismatch a strict
+              // fiat_amount equality check is prone to (reserveBuyOrder.ts
+              // now rounds to match what the on-chain reservation actually
+              // stores, but a strict .eq()-style check here has zero
+              // tolerance for any future drift between the two -- see
+              // receiptByOrder.ts for the same reasoning applied to the
+              // "Check now" fallback). Fall back to a rounded, +/-1
+              // tolerant amount match when no signer is known yet -- with
+              // the poll above, that window is now usually just the few
+              // seconds between signing and the next tick.
+              const currencyMatches = payload.new?.currency === state?.currency;
+              const signerMatches = state?.signerAddress && payload.new?.taker_address === state.signerAddress;
+              const amountMatches =
+                !state?.signerAddress &&
+                Math.abs(Math.round(Number(payload.new?.fiat_amount)) - Math.round(Number(state?.fiatAmount))) <= 1;
+              if (!currencyMatches || !(signerMatches || amountMatches)) return;
+              showReceipt(payload.new);
+            }
+          )
+          .subscribe();
+      }
+
+      app.ontoolresult = (result) => render(result.structuredContent);
+
+      document.getElementById("refreshBtn").addEventListener("click", async () => {
+        const state = window.__sellState;
+        if (!state?.orderAddress || settled) return;
+        const btn = document.getElementById("refreshBtn");
+        const originalLabel = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Checking…";
+        try {
+          // Try to resolve the signer first: if the user has scanned by now,
+          // this upgrades the lookup below from a tolerant amount match to an
+          // exact taker_address match.
+          const signerAddress = (await resolveSigner()) ?? state.signerAddress;
+
+          const response = await app.callServerTool({
+            name: "get_reserve_buy_order_receipt",
+            arguments: {
+              orderAddress: state.orderAddress,
+              fiatAmount: state.fiatAmount,
+              currency: state.currency,
+              signerAddress,
+            },
+          });
+          const receiptCheck = response?.structuredContent;
+          if (receiptCheck?.found) {
+            showReceipt(receiptCheck.receipt);
+            return;
+          }
+          btn.textContent = "Not settled yet";
+          setTimeout(() => {
+            if (!settled) btn.textContent = originalLabel;
+          }, 2000);
+        } catch (err) {
+          console.warn("manual receipt check failed", err);
+          btn.textContent = originalLabel;
+        } finally {
+          if (!settled) btn.disabled = false;
+        }
+      });
+
+      function isMobileDevice() {
+        return /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent || "");
+      }
+
+      async function openExternal(url, btn, opts = {}) {
+        if (!url) return;
+        const original = btn.textContent;
+        if (app.getHostCapabilities()?.openLinks) {
+          try {
+            const { isError } = await app.openLink({ url });
+            if (!isError) return;
+          } catch {
+            // fall through to the next strategy
+          }
+        }
+        // Custom URI schemes (e.g. "solana:") aren't guaranteed to be
+        // something a host's openLink will forward -- a direct top-level
+        // navigation is what actually triggers the OS's "open with" wallet
+        // picker on a phone. Only attempted when explicitly opted into,
+        // since it's not the right move for ordinary https links.
+        if (opts.tryDirectNav) {
+          try {
+            window.location.href = url;
+            return;
+          } catch {
+            // fall through to clipboard
+          }
+        }
+        try {
+          await navigator.clipboard.writeText(url);
+          btn.textContent = opts.copiedFallbackLabel ?? "Couldn't open — link copied instead";
+        } catch {
+          btn.textContent = "Couldn't open link";
+        }
+        setTimeout(() => (btn.textContent = original), 2000);
+      }
+
+      document.getElementById("receiptLink").addEventListener("click", (e) => openExternal(e.target.dataset.receiptUrl, e.target));
+
+      // Primary action button: on a phone, the useful thing is handing the
+      // Solana Pay request straight to a wallet app and letting the OS show
+      // its "open with" picker -- copying a link the user has nowhere to
+      // paste isn't useful there. On desktop there's no wallet app to hand
+      // off to, so it stays a copy-the-checkout-link button (routed through
+      // the same openExternal() helper as the receipt link, so it benefits
+      // from the same host-capability-first, clipboard-fallback behavior
+      // instead of a bare clipboard call that can fail silently).
+      const primaryActionBtn = document.getElementById("copyLinkBtn");
+      if (isMobileDevice()) {
+        primaryActionBtn.textContent = "Open in wallet";
+        primaryActionBtn.addEventListener("click", () => {
+          const url = window.__sellState?.transactionRequestUrl;
+          openExternal(url, primaryActionBtn, {
+            tryDirectNav: true,
+            copiedFallbackLabel: "Couldn't open a wallet app — link copied instead",
+          });
+        });
+      } else {
+        primaryActionBtn.addEventListener("click", () => {
+          const url = window.__sellState?.checkoutPageUrl;
+          openExternal(url, primaryActionBtn, {
+            copiedFallbackLabel: "Copied!",
+          });
+        });
+      }
+
+      await app.connect();
+    </script>
+  </body>
+</html>

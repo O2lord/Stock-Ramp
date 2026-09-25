@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stock Ramp — design directions</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    background: #08080a;
+    color: #e8e8ea;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1240px; margin: 0 auto; padding: 48px 24px 120px; }
+  .page > h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
+  .page > p.lede { color: #8a8a92; font-size: 14px; margin-top: 8px; max-width: 640px; line-height: 1.6; }
+
+  .opt-head { margin: 64px 0 16px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .opt-head .tag {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+    padding: 4px 9px; border-radius: 4px; background: #1c1c20; color: #9a9aa2;
+  }
+  .opt-head h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .opt-head .note { font-size: 13px; color: #78787f; }
+
+  .swatches { display: flex; gap: 6px; margin: 0 0 14px; flex-wrap: wrap; }
+  .sw { width: 76px; border-radius: 5px; overflow: hidden; border: 1px solid rgba(255,255,255,.08); }
+  .sw .chip { height: 34px; }
+  .sw .hex { font-size: 9.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+             color: #7c7c84; padding: 4px 5px; background: #111114; letter-spacing: 0.02em; }
+
+  .frame { border: 1px solid rgba(255,255,255,.1); border-radius: 12px; overflow: hidden; }
+
+  /* ---------- shared mockup skeleton, themed by CSS vars on .mock ---------- */
+  .mock { font-size: 14px; }
+  .mock .nav {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 62px; padding: 0 26px;
+    background: var(--nav-bg); border-bottom: 1px solid var(--border);
+  }
+  .mock .brand { display: flex; align-items: center; gap: 10px; }
+  .mock .mark {
+    width: 26px; height: 26px; border-radius: 7px; background: var(--accent);
+    display: grid; place-items: center; font-weight: 800; font-size: 13px; color: var(--on-accent);
+  }
+  .mock .brand b { font-size: 15px; font-weight: 700; color: var(--fg); letter-spacing: -0.01em; }
+  .mock .links { display: flex; gap: 22px; margin-left: 30px; }
+  .mock .links span { font-size: 13.5px; color: var(--fg-dim); padding: 4px 0; }
+  .mock .links span.on { color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
+  .mock .navright { display: flex; gap: 8px; align-items: center; }
+  .mock .chipbtn {
+    font-size: 12.5px; padding: 7px 13px; border-radius: var(--r);
+    border: 1px solid var(--border-strong); color: var(--fg); background: var(--surface-1);
+  }
+
+  .mock .ticker {
+    display: flex; align-items: center; height: 38px; overflow: hidden;
+    background: var(--ticker-bg); border-bottom: 1px solid var(--ticker-line);
+  }
+  .mock .ticker .pin {
+    display: flex; gap: 6px; align-items: center; padding: 0 16px; height: 100%;
+    border-right: 1px solid var(--ticker-line);
+    font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .mock .ticker .pin i { color: var(--accent); font-style: normal; }
+  .mock .ticker .pin s { color: var(--fg-faint); text-decoration: none; }
+  .mock .ticker .tk { display: flex; gap: 0; flex: 1; }
+  .mock .ticker .tk div {
+    display: flex; gap: 8px; align-items: center; padding: 0 22px; white-space: nowrap;
+    border-right: 1px solid var(--ticker-line);
+  }
+  .mock .ticker .sym { font-size: 10.5px; font-weight: 700; letter-spacing: 0.13em; color: var(--fg-faint); }
+  .mock .ticker .px { font-size: 13px; font-weight: 700; color: var(--fg); font-variant-numeric: tabular-nums; }
+  .mock .ticker .up { font-size: 12px; font-weight: 700; color: var(--up); }
+  .mock .ticker .dn { font-size: 12px; font-weight: 700; color: var(--dn); }
+
+  .mock .strip {
+    display: flex; justify-content: center; gap: 44px; padding: 11px 0;
+    background: var(--strip-bg); border-bottom: 1px solid var(--border);
+  }
+  .mock .strip b { font-size: 10.5px; font-weight: 700; letter-spacing: 0.15em;
+                   text-transform: uppercase; color: var(--fg-faint); }
+  .mock .strip em { font-style: normal; font-size: 13px; font-weight: 700; color: var(--fg);
+                    margin-left: 9px; font-variant-numeric: tabular-nums; }
+
+  .mock .body { background: var(--bg); padding: 30px 26px 34px; }
+  .mock h3 { font-size: 20px; font-weight: 700; color: var(--fg); letter-spacing: -0.015em; }
+  .mock .sub { font-size: 13px; color: var(--fg-dim); margin-top: 4px; }
+
+  .mock .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 16px; }
+  .mock .tabs { display: inline-flex; gap: 3px; padding: 3px; border-radius: var(--r); background: var(--surface-1); }
+  .mock .tabs span { font-size: 13px; padding: 6px 13px; border-radius: calc(var(--r) - 2px); color: var(--fg-dim); }
+  .mock .tabs span.on { background: var(--surface-2); color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
+
+  .mock .cta {
+    font-size: 13px; font-weight: 600; padding: 9px 15px; border-radius: var(--r);
+    background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent);
+  }
+  .mock .cta.ghost { background: transparent; color: var(--fg); border-color: var(--border-strong); }
+
+  .mock .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .mock .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--card-r);
+    padding: 15px 16px;
+  }
+  .mock .card .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .mock .card .tkr { font-size: 14px; font-weight: 700; color: var(--fg); letter-spacing: -0.01em; }
+  .mock .card .who { font-size: 11px; color: var(--fg-faint); font-family: ui-monospace, Menlo, monospace; margin-top: 3px; }
+  .mock .card .pill {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 3px 7px; border-radius: 4px; background: var(--pill-bg); color: var(--pill-fg);
+  }
+  .mock .card .big { font-size: 22px; font-weight: 700; color: var(--fg); margin: 13px 0 2px;
+                     font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .mock .card .unit { font-size: 12px; color: var(--fg-dim); }
+  .mock .card .meta { display: flex; justify-content: space-between; font-size: 11.5px;
+                      color: var(--fg-faint); margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--border); }
+  .mock .card .act { margin-top: 12px; text-align: center; font-size: 12.5px; font-weight: 600;
+                     padding: 8px; border-radius: var(--r); background: var(--accent); color: var(--on-accent); }
+  .mock .card.q .act { background: transparent; color: var(--fg); border: 1px solid var(--border-strong); }
+
+  .mock .hero { background: var(--bg); padding: 46px 26px 40px; text-align: center; }
+  .mock .hero h2 { font-size: 40px; font-weight: 800; letter-spacing: var(--hero-ls); color: var(--fg);
+                   text-transform: var(--hero-tt); line-height: 1.02; }
+  .mock .hero p { font-size: 14.5px; color: var(--fg-dim); max-width: 520px; margin: 14px auto 0; line-height: 1.6; }
+  .mock .hero .btns { display: flex; gap: 10px; justify-content: center; margin-top: 24px; }
+
+  .mock .steps { display: grid; grid-template-columns: repeat(3,1fr); gap: 0;
+                 border: 1px solid var(--border); border-radius: var(--card-r); overflow: hidden; background: var(--surface-1); }
+  .mock .steps > div { padding: 18px 18px 20px; border-right: 1px solid var(--border); }
+  .mock .steps > div:last-child { border-right: 0; }
+  .mock .steps .n { font-size: 11px; font-weight: 700; color: var(--accent); letter-spacing: 0.14em; }
+  .mock .steps .t { font-size: 13.5px; font-weight: 600; color: var(--fg); margin: 7px 0 5px; }
+  .mock .steps .d { font-size: 12.5px; color: var(--fg-dim); line-height: 1.55; }
+
+  @media (max-width: 860px) {
+    .mock .grid, .mock .steps { grid-template-columns: 1fr; }
+    .mock .links { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Stock Ramp — three design directions</h1>
+  <p class="lede">Same components, three palettes. Each block is the navbar, ticker, stats strip, order grid and landing hero. Pick one (or mix — e.g. A's neutrals with C's ticker) and I'll rewrite globals.css, tailwind.config.ts and strip the hardcoded hexes out of the UI primitives.</p>
+
+  <!-- ============================== A ============================== -->
+  <div class="opt-head">
+    <span class="tag">Option A</span>
+    <h2>Ink</h2>
+    <span class="note">Cold neutral dark, single orange accent. Reads like a modern exchange.</span>
+  </div>
+  <div class="swatches">
+    <div class="sw"><div class="chip" style="background:#0A0A0C"></div><div class="hex">#0A0A0C bg</div></div>
+    <div class="sw"><div class="chip" style="background:#141417"></div><div class="hex">#141417 card</div></div>
+    <div class="sw"><div class="chip" style="background:#1E1E23"></div><div class="hex">#1E1E23 raise</div></div>
+    <div class="sw"><div class="chip" style="background:#F26419"></div><div class="hex">#F26419 accent</div></div>
+    <div class="sw"><div class="chip" style="background:#ECECEF"></div><div class="hex">#ECECEF text</div></div>
+    <div class="sw"><div class="chip" style="background:#2BD98C"></div><div class="hex">#2BD98C up</div></div>
+  </div>
+  <div class="frame">
+    <div class="mock" style="
+      --bg:#0A0A0C; --surface-1:#141417; --surface-2:#1E1E23; --nav-bg:#0A0A0C;
+      --ticker-bg:#141417; --ticker-line:rgba(255,255,255,.07); --strip-bg:#0F0F12;
+      --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.18);
+      --fg:#ECECEF; --fg-dim:#9A9AA4; --fg-faint:#63636D;
+      --accent:#F26419; --on-accent:#0A0A0C; --up:#2BD98C; --dn:#F2555A;
+      --pill-bg:rgba(242,100,25,.14); --pill-fg:#F58A4E;
+      --r:8px; --card-r:12px; --hero-ls:-0.03em; --hero-tt:none;">
+      <div class="nav">
+        <div class="brand"><div class="mark">S</div><b>Stock&nbsp;Ramp</b>
+          <div class="links"><span class="on">Stocks</span><span>Merchant</span><span>Providers</span><span>Admin</span></div>
+        </div>
+        <div class="navright"><div class="chipbtn">☾</div><div class="chipbtn">SR4T…k2LJ</div></div>
+      </div>
+      <div class="ticker">
+        <div class="pin"><i>128</i><s>created</s></div>
+        <div class="tk">
+          <div><span class="sym">AAPLX</span><span class="px">$330.82</span><span class="up">▲ 1.2%</span></div>
+          <div><span class="sym">NVDAX</span><span class="px">$211.47</span><span class="up">▲ 0.8%</span></div>
+          <div><span class="sym">TSLAX</span><span class="px">$357.32</span><span class="dn">▼ 0.4%</span></div>
+          <div><span class="sym">METAX</span><span class="px">$658.96</span><span class="up">▲ 2.1%</span></div>
+        </div>
+      </div>
+      <div class="strip"><div><b>Active orders</b><em>24</em></div><div><b>Total volume</b><em>1.4M</em></div></div>
+      <div class="body">
+        <h3>Stocks</h3><div class="sub">Browse live buy and sell orders for xStocks, or create your own.</div>
+        <div class="row">
+          <div class="tabs"><span class="on">Buy orders</span><span>Sell orders</span></div>
+          <div class="cta">+ New buy order</div>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="top"><div><div class="tkr">AAPLX</div><div class="who">7xQp…4mLd</div></div><div class="pill">Open</div></div>
+            <div class="big">₦1,420<span class="unit"> / token</span></div>
+            <div class="meta"><span>Available 18.4</span><span>NGN</span></div>
+            <div class="act">Reserve</div>
+          </div>
+          <div class="card">
+            <div class="top"><div><div class="tkr">NVDAX</div><div class="who">Bk9z…Ht2s</div></div><div class="pill">Open</div></div>
+            <div class="big">₦1,905<span class="unit"> / token</span></div>
+            <div class="meta"><span>Available 6.1</span><span>NGN</span></div>
+            <div class="act">Reserve</div>
+          </div>
+          <div class="card q">
+            <div class="top"><div><div class="tkr">TSLAX</div><div class="who">Yours</div></div><div class="pill">Partial</div></div>
+            <div class="big">₦2,110<span class="unit"> / token</span></div>
+            <div class="meta"><span>Available 2.9</span><span>NGN</span></div>
+            <div class="act">Cancel or reduce</div>
+          </div>
+        </div>
+      </div>
+      <div class="hero">
+        <h2>Stock Ramp</h2>
+        <p>Peer-to-peer on-ramp and off-ramp for tokenized equities on Solana, settled in local currency.</p>
+        <div class="btns"><div class="cta">Get started →</div><div class="cta ghost">Browse providers</div></div>
+      </div>
+      <div class="body" style="padding-top:0">
+        <div class="steps">
+          <div><div class="n">01</div><div class="t">Find a rate</div><div class="d">Live buy and sell orders priced in your local currency by makers.</div></div>
+          <div><div class="n">02</div><div class="t">Reserve instantly</div><div class="d">Lock an amount against escrow. No waiting for a counterparty.</div></div>
+          <div><div class="n">03</div><div class="t">Validator payout</div><div class="d">Registered validators confirm payment before funds release.</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== B ============================== -->
+  <div class="opt-head">
+    <span class="tag">Option B</span>
+    <h2>Ember</h2>
+    <span class="note">The warm idea done properly — deep ember-brown with cream text, not muddy khaki.</span>
+  </div>
+  <div class="swatches">
+    <div class="sw"><div class="chip" style="background:#12100F"></div><div class="hex">#12100F bg</div></div>
+    <div class="sw"><div class="chip" style="background:#1C1917"></div><div class="hex">#1C1917 card</div></div>
+    <div class="sw"><div class="chip" style="background:#292420"></div><div class="hex">#292420 raise</div></div>
+    <div class="sw"><div class="chip" style="background:#FF6B2C"></div><div class="hex">#FF6B2C accent</div></div>
+    <div class="sw"><div class="chip" style="background:#F5EDE4"></div><div class="hex">#F5EDE4 text</div></div>
+    <div class="sw"><div class="chip" style="background:#4ADE9B"></div><div class="hex">#4ADE9B up</div></div>
+  </div>
+  <div class="frame">
+    <div class="mock" style="
+      --bg:#12100F; --surface-1:#1C1917; --surface-2:#292420; --nav-bg:#12100F;
+      --ticker-bg:#0B0A09; --ticker-line:rgba(255,107,44,.16); --strip-bg:#1C1917;
+      --border:rgba(245,237,228,.10); --border-strong:rgba(245,237,228,.22);
+      --fg:#F5EDE4; --fg-dim:#A89C90; --fg-faint:#6E635A;
+      --accent:#FF6B2C; --on-accent:#12100F; --up:#4ADE9B; --dn:#F2555A;
+      --pill-bg:rgba(255,107,44,.15); --pill-fg:#FF9463;
+      --r:6px; --card-r:10px; --hero-ls:-0.02em; --hero-tt:uppercase;">
+      <div class="nav">
+        <div class="brand"><div class="mark">S</div><b>Stock&nbsp;Ramp</b>
+          <div class="links"><span class="on">Stocks</span><span>Merchant</span><span>Providers</span><span>Admin</span></div>
+        </div>
+        <div class="navright"><div class="chipbtn">☾</div><div class="chipbtn">SR4T…k2LJ</div></div>
+      </div>
+      <div class="ticker">
+        <div class="pin"><i>128</i><s>created</s></div>
+        <div class="tk">
+          <div><span class="sym">AAPLX</span><span class="px">$330.82</span><span class="up">▲ 1.2%</span></div>
+          <div><span class="sym">NVDAX</span><span class="px">$211.47</span><span class="up">▲ 0.8%</span></div>
+          <div><span class="sym">TSLAX</span><span class="px">$357.32</span><span class="dn">▼ 0.4%</span></div>
+          <div><span class="sym">METAX</span><span class="px">$658.96</span><span class="up">▲ 2.1%</span></div>
+        </div>
+      </div>
+      <div class="strip"><div><b>Active orders</b><em>24</em></div><div><b>Total volume</b><em>1.4M</em></div></div>
+      <div class="body">
+        <h3>Stocks</h3><div class="sub">Browse live buy and sell orders for xStocks, or create your own.</div>
+        <div class="row">
+          <div class="tabs"><span class="on">Buy orders</span><span>Sell orders</span></div>
+          <div class="cta">+ New buy order</div>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="top"><div><div class="tkr">AAPLX</div><div class="who">7xQp…4mLd</div></div><div class="pill">Open</div></div>
+            <div class="big">₦1,420<span class="unit"> / token</span></div>
+            <div class="meta"><span>Available 18.4</span><span>NGN</span></div>
+            <div class="act">Reserve</div>
+          </div>
+          <div class="card">
+            <div class="top"><div><div class="tkr">NVDAX</div><div class="who">Bk9z…Ht2s</div></div><div class="pill">Open</div></div>
+            <div class="big">₦1,905<span class="unit"> / token</span></div>
+            <div class="meta"><span>Available 6.1</span><span>NGN</span></div>
+            <div class="act">Reserve</div>
+          </div>
+          <div class="card q">
+            <div class="top"><div><div class="tkr">TSLAX</div><div class="who">Yours</div></div><div class="pill">Partial</div></div>
+            <div class="big">₦2,110<span class="unit"> / token</span></div>
+            <div class="meta"><span>Available 2.9</span><span>NGN</span></div>
+            <div class="act">Cancel or reduce</div>
+          </div>
+        </div>
+      </div>
+      <div class="hero">
+        <h2>Stock Ramp</h2>
+        <p>Peer-to-peer on-ramp and off-ramp for tokenized equities on Solana, settled in local currency.</p>
+        <div class="btns"><div class="cta">Get started →</div><div class="cta ghost">Browse providers</div></div>
+      </div>
+      <div class="body" style="padding-top:0">
+        <div class="steps">
+          <div><div class="n">01</div><div class="t">Find a rate</div><div class="d">Live buy and sell orders priced in your local currency by makers.</div></div>
+          <div><div class="n">02</div><div class="t">Reserve instantly</div><div class="d">Lock an amount against escrow. No waiting for a counterparty.</div></div>
+          <div><div class="n">03</div><div class="t">Validator payout</div><div class="d">Registered validators confirm payment before funds release.</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== C ============================== -->
+  <div class="opt-head">
+    <span class="tag">Option C</span>
+    <h2>Terminal</h2>
+    <span class="note">True black, hairline borders, squared corners. Trading-desk density.</span>
+  </div>
+  <div class="swatches">
+    <div class="sw"><div class="chip" style="background:#000000"></div><div class="hex">#000000 bg</div></div>
+    <div class="sw"><div class="chip" style="background:#0C0C0C"></div><div class="hex">#0C0C0C card</div></div>
+    <div class="sw"><div class="chip" style="background:#171717"></div><div class="hex">#171717 raise</div></div>
+    <div class="sw"><div class="chip" style="background:#FF4D00"></div><div class="hex">#FF4D00 accent</div></div>
+    <div class="sw"><div class="chip" style="background:#FAFAFA"></div><div class="hex">#FAFAFA text</div></div>
+    <div class="sw"><div class="chip" style="background:#00E08F"></div><div class="hex">#00E08F up</div></div>
+  </div>
+  <div class="frame">
+    <div class="mock" style="
+      --bg:#000; --surface-1:#0C0C0C; --surface-2:#171717; --nav-bg:#000;
+      --ticker-bg:#0C0C0C; --ticker-line:rgba(255,77,0,.22); --strip-bg:#000;
+      --border:rgba(255,255,255,.12); --border-strong:rgba(255,255,255,.28);
+      --fg:#FAFAFA; --fg-dim:#8F8F8F; --fg-faint:#5A5A5A;
+      --accent:#FF4D00; --on-accent:#000; --up:#00E08F; --dn:#FF3B47;
+      --pill-bg:transparent; --pill-fg:#FF7A3D;
+      --r:2px; --card-r:2px; --hero-ls:-0.045em; --hero-tt:uppercase;">
+      <div class="nav">
+        <div class="brand"><div class="mark" style="border-radius:2px">S</div><b>Stock&nbsp;Ramp</b>
+          <div class="links"><span class="on">Stocks</span><span>Merchant</span><span>Providers</span><span>Admin</span></div>
+        </div>
+        <div class="navright"><div class="chipbtn">☾</div><div class="chipbtn">SR4T…k2LJ</div></div>
+      </div>
+      <div class="ticker">
+        <div class="pin"><i>128</i><s>created</s></div>
+        <div class="tk">
+          <div><span class="sym">AAPLX</span><span class="px">$330.82</span><span class="up">▲ 1.2%</span></div>
+          <div><span class="sym">NVDAX</span><span class="px">$211.47</span><span class="up">▲ 0.8%</span></div>
+          <div><span class="sym">TSLAX</span><span class="px">$357.32</span><span class="dn">▼ 0.4%</span></div>
+          <div><span class="sym">METAX</span><span class="px">$658.96</span><span class="up">▲ 2.1%</span></div>
+        </div>
+      </div>
+      <div class="strip"><div><b>Active orders</b><em>24</em></div><div><b>Total volume</b><em>1.4M</em></div></div>
+      <div class="body">
+        <h3>Stocks</h3><div class="sub">Browse live buy and sell orders for xStocks, or create your own.</div>
+        <div class="row">
+          <div class="tabs"><span class="on">Buy orders</span><span>Sell orders</span></div>
+          <div class="cta">+ New buy order</div>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="top"><div><div class="tkr">AAPLX</div><div class="who">7xQp…4mLd</div></div><div class="pill" style="border:1px solid rgba(255,77,0,.4)">Open</div></div>
+            <div class="big">₦1,420<span class="unit"> / token</span></div>
+            <div class="meta"><span>Available 18.4</span><span>NGN</span></div>
+            <div class="act">Reserve</div>
+          </div>
+          <div class="card">
+            <div class="top"><div><div class="tkr">NVDAX</div><div class="who">Bk9z…Ht2s</div></div><div class="pill" style="border:1px solid rgba(255,77,0,.4)">Open</div></div>
+            <div class="big">₦1,905<span class="unit"> / token</span></div>
+            <div class="meta"><span>Available 6.1</span><span>NGN</span></div>
+            <div class="act">Reserve</div>
+          </div>
+          <div class="card q">
+            <div class="top"><div><div class="tkr">TSLAX</div><div class="who">Yours</div></div><div class="pill" style="border:1px solid rgba(255,255,255,.25); color:#8F8F8F">Partial</div></div>
+            <div class="big">₦2,110<span class="unit"> / token</span></div>
+            <div class="meta"><span>Available 2.9</span><span>NGN</span></div>
+            <div class="act">Cancel or reduce</div>
+          </div>
+        </div>
+      </div>
+      <div class="hero">
+        <h2>Stock Ramp</h2>
+        <p>Peer-to-peer on-ramp and off-ramp for tokenized equities on Solana, settled in local currency.</p>
+        <div class="btns"><div class="cta">Get started →</div><div class="cta ghost">Browse providers</div></div>
+      </div>
+      <div class="body" style="padding-top:0">
+        <div class="steps">
+          <div><div class="n">01</div><div class="t">Find a rate</div><div class="d">Live buy and sell orders priced in your local currency by makers.</div></div>
+          <div><div class="n">02</div><div class="t">Reserve instantly</div><div class="d">Lock an amount against escrow. No waiting for a counterparty.</div></div>
+          <div><div class="n">03</div><div class="t">Validator payout</div><div class="d">Registered validators confirm payment before funds release.</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

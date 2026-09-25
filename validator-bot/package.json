@@ -1,0 +1,30 @@
+{
+  "name": "stockramp-validator-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Validator node for StockRamp — verifies payments and submits on-chain votes",
+  "main": "dist/val_bot.js",
+  "scripts": {
+    "build": "tsx scripts/write-version.ts && tsc --noEmit",
+    "start": "node dist/val_bot.js",
+    "start:all": "node dist/run-all.js",
+    "dev": "node -e \"require('fs').writeFileSync('version.ts', 'export const BOT_VERSION = \\\"' + require('child_process').execSync('git rev-parse HEAD').toString().trim() + '\\\";')\" && tsx val_bot.ts",
+    "dev:all": "tsx run-all.ts"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.30.1",
+    "@noble/hashes": "^1.4.0",
+    "@solana/spl-token": "^0.4.6",
+    "@solana/web3.js": "^1.91.8",
+    "bn.js": "^5.2.1",
+    "bs58": "^5.0.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.2.0",
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.5"
+  }
+}

@@ -1,0 +1,633 @@
+<!--
+  stockRampHub.html
+  ====================
+  MCP App UI resource for open_stock_ramp (registered under
+  ui://stock-ramp/hub-v2 in registerStockRampHubApp.ts).
+
+  Ported from Trust Vault's trustVaultHub.html: renamed brand/URIs only,
+  logic unchanged EXCEPT for the currency+stock grouping fix below --
+  Trust Vault has no multi-asset concept, StockRamp does, and the ported
+  logic originally mixed different stocks' orders into one "spread" per
+  currency. Rates and order lookups are now scoped to currency + mint
+  (stock) together, never currency alone. Realtime filter column is
+  `trust_express_address` -- confirmed against discord-bot/bot.ts's actual
+  receipt inserts, which never renamed this column. One card, two views:
+    #view-home   -- rates list + Buy/Sell tabs + form (currency, stock, amount)
+    #view-status -- QR + status pill, reused for BOTH tabs' reservation flow
+
+  "New request" in #view-status returns to #view-home with rates
+  refreshed, so the card is reusable for a whole browsing session.
+
+  LINK BUTTONS: the reservation-link button used to call
+  navigator.clipboard.writeText() directly, which is often blocked inside a
+  sandboxed MCP-app iframe -- the button silently did nothing. It now goes
+  through openExternal() like "View full receipt" and "Open payment link":
+  the host's openLink() first, then a clipboard copy as a last resort.
+  openExternal() itself was hardened too: its clipboard fallbacks were
+  unguarded (a denied clipboard threw an unhandled rejection and left the
+  button label stuck), so copying now goes through copyText(), which never
+  throws and has an execCommand fallback.
+
+  SETTLED STATE: this was the one remaining place with the bug already
+  fixed in reserveBuyOrderCard.html / reserveSellOrderCard.html -- this
+  file's showReceipt() never hid the QR or the action row, so the status
+  view kept showing "Scan to sign" / "Check now" / "Open reservation link"
+  right alongside the "Paid" pill forever, and the receipt link stayed a
+  plain text link instead of being promoted. qrWrap/actionsRow now have
+  ids so showReceipt() can collapse them, refreshStatusBtn gets disabled
+  and relabeled "Settled", and receiptLink gets the same .cta full-width
+  promotion the other two cards use.
+-->
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: transparent;
+        color: #f2f2f2;
+      }
+      .card { max-width: 420px; margin: 0 auto; background: #17181c; border: 1px solid #2a2b31; border-radius: 16px; padding: 20px; }
+      .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+      .brand { font-weight: 700; font-size: 15px; letter-spacing: 0.2px; }
+      .refresh-btn { border: none; background: none; color: #9a9ba3; cursor: pointer; font-size: 12px; padding: 4px 8px; border-radius: 8px; }
+      .refresh-btn:hover { background: #1f2025; color: #f2f2f2; }
+
+      .rates-list { border: 1px solid #2a2b31; border-radius: 12px; overflow: hidden; margin-bottom: 16px; max-height: 220px; overflow-y: auto; }
+      .rate-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 9px 12px; font-size: 12px; align-items: center; border-bottom: 1px solid #222327; }
+      .rate-row:last-child { border-bottom: none; }
+      .rate-row .cur { font-weight: 700; color: #f2f2f2; }
+      .rate-row .cur .cur-fiat { font-weight: 400; color: #6a6b73; font-size: 10px; margin-left: 4px; text-transform: uppercase; }
+      .rate-row .val { text-align: right; font-variant-numeric: tabular-nums; }
+      .rate-row .val.sell { color: #4ade80; }
+      .rate-row .val.buy { color: #5cb8f5; }
+      .rate-row .val .lbl { display: block; font-size: 9px; color: #6a6b73; font-weight: 600; text-transform: uppercase; }
+      .empty-rates { padding: 16px; text-align: center; font-size: 12px; color: #6a6b73; }
+
+      .tabs { display: flex; gap: 6px; background: #101114; border-radius: 10px; padding: 4px; margin-bottom: 14px; }
+      .tab { flex: 1; border: none; background: transparent; color: #9a9ba3; padding: 8px; border-radius: 8px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; cursor: pointer; }
+      .tab[data-active="true"] { background: #e8480a; color: #fff; }
+
+      .field { margin-bottom: 10px; }
+      .field label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: #9a9ba3; margin-bottom: 5px; }
+      .field select, .field input { width: 100%; background: #1f2025; border: 1px solid #2a2b31; color: #f2f2f2; padding: 9px 10px; border-radius: 8px; font-size: 13px; }
+      .field select:focus, .field input:focus { outline: none; border-color: #e8480a; }
+      .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .summary { display: flex; justify-content: space-between; align-items: center; background: #101114; border-radius: 8px; padding: 10px 12px; margin: 12px 0; font-size: 12px; }
+      .summary .amt { font-weight: 700; font-size: 15px; }
+      .hint { font-size: 11px; color: #6a6b73; margin: 6px 0 14px; }
+      .error-hint { font-size: 11px; color: #f87171; margin: 6px 0 0; }
+
+      .submit-btn { width: 100%; border: none; background: #e8480a; color: #fff; padding: 12px; border-radius: 10px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; cursor: pointer; }
+      .submit-btn:disabled { opacity: 0.4; cursor: default; }
+      .submit-btn:hover:not(:disabled) { background: #d1400a; }
+
+      #view-status { display: none; }
+      .status-pill { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: #3a2f0f; color: #f5c542; }
+      .status-pill[data-state="awaiting"] { background: #12283a; color: #5cb8f5; }
+      .status-pill[data-state="success"] { background: #0f3a1c; color: #4ade80; }
+      .qr-wrap { display: flex; justify-content: center; background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+      .qr-wrap img { width: 220px; height: 220px; display: block; }
+      .amount { text-align: center; font-size: 30px; font-weight: 700; margin-bottom: 4px; }
+      .subamount { text-align: center; font-size: 13px; color: #9a9ba3; margin-bottom: 16px; }
+      .details { border-top: 1px solid #2a2b31; padding-top: 12px; display: grid; grid-template-columns: auto 1fr; row-gap: 8px; column-gap: 16px; font-size: 13px; }
+      .details dt { color: #9a9ba3; }
+      .details dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+      .actions { display: flex; gap: 8px; margin-top: 16px; }
+      .actions button { flex: 1; border: 1px solid #2a2b31; background: #1f2025; color: #f2f2f2; padding: 10px 12px; border-radius: 10px; font-size: 13px; cursor: pointer; }
+      .actions button:hover { background: #26272d; }
+      .actions button.primary { background: #1c3550; border-color: #2c5a86; }
+      .actions button.primary:hover { background: #22405f; }
+      .actions button[hidden] { display: none; }
+      .actions button[disabled] { opacity: 0.6; cursor: default; }
+      .receipt-link, .back-link { display: block; width: 100%; text-align: center; margin-top: 14px; font-size: 12px; color: #7aa2f7; text-decoration: none; background: none; border: none; padding: 0; cursor: pointer; }
+      .receipt-link:hover, .back-link:hover { text-decoration: underline; }
+      .receipt-link[hidden] { display: none; }
+      .receipt-link.cta {
+        background: #1c3550;
+        border: 1px solid #2c5a86;
+        border-radius: 10px;
+        padding: 12px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #fff;
+        margin-top: 16px;
+      }
+      .receipt-link.cta:hover { background: #22405f; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <!-- ═══ HOME VIEW ═══ -->
+      <div id="view-home">
+        <div class="card-header">
+          <span class="brand">StockRamp</span>
+          <button class="refresh-btn" id="refreshRatesBtn" type="button">↻ Refresh</button>
+        </div>
+
+        <div class="rates-list" id="ratesList"><div class="empty-rates">Loading live rates…</div></div>
+
+        <div class="tabs">
+          <button class="tab" id="tabBuy" data-active="true" type="button">Buy tokens</button>
+          <button class="tab" id="tabSell" data-active="false" type="button">Sell tokens</button>
+        </div>
+
+        <div class="row-2">
+          <div class="field">
+            <label>Currency</label>
+            <select id="currencySelect"></select>
+          </div>
+          <div class="field">
+            <label>Stock</label>
+            <select id="assetSelect"></select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label id="amountLabel">Token amount</label>
+          <input type="number" id="amountInput" placeholder="e.g. 10" min="0" step="0.0001" />
+        </div>
+
+        <div id="sellFields" hidden>
+          <div class="row-2">
+            <div class="field"><label>Bank name</label><input type="text" id="bankNameInput" placeholder="e.g. GTBank" /></div>
+            <div class="field"><label>Bank code</label><input type="text" id="bankCodeInput" placeholder="e.g. 058" /></div>
+          </div>
+          <div class="row-2">
+            <div class="field"><label>Account number</label><input type="text" id="accountNumberInput" placeholder="0123456789" /></div>
+            <div class="field"><label>Beneficiary name</label><input type="text" id="beneficiaryInput" placeholder="Account holder" /></div>
+          </div>
+        </div>
+
+        <div class="summary" id="summaryRow" hidden>
+          <span id="summaryLabel">You'll pay</span>
+          <span class="amt" id="summaryValue">—</span>
+        </div>
+        <p class="error-hint" id="formError" hidden></p>
+
+        <button class="submit-btn" id="submitBtn" type="button" disabled>Choose a currency</button>
+        <p class="hint">No wallet address needed — it identifies itself when you scan the QR.</p>
+      </div>
+
+      <!-- ═══ STATUS VIEW (shared: buy 3-stage / sell 2-stage) ═══ -->
+      <div id="view-status">
+        <div class="card-header">
+          <span class="brand">StockRamp</span>
+          <span class="status-pill" id="statusPill" data-state="pending">Scan to continue</span>
+        </div>
+
+        <div class="qr-wrap" id="qrWrap"><img id="qrImage" alt="Scan to reserve" /></div>
+
+        <div class="amount" id="tokenLabel">—</div>
+        <div class="subamount" id="fiatLabel">—</div>
+
+        <dl class="details">
+          <dt id="detailRow1Label">Order</dt>
+          <dd id="detailRow1Value">—</dd>
+          <dt id="detailRow2Label">Reference</dt>
+          <dd id="detailRow2Value">—</dd>
+        </dl>
+
+        <p class="hint" id="statusHint">Scan with Phantom or Backpack to sign.</p>
+
+        <div class="actions" id="actionsRow">
+          <button id="copyLinkBtn" type="button">Open reservation link</button>
+          <button id="payNowBtn" class="primary" type="button" hidden>Open payment link</button>
+          <button id="refreshStatusBtn" type="button">Check now</button>
+        </div>
+
+        <button class="receipt-link" id="receiptLink" type="button" hidden>View full receipt →</button>
+        <button class="back-link" id="backToHomeBtn" type="button">← New request</button>
+      </div>
+    </div>
+
+    <script type="module">
+      import { App } from "https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps/+esm";
+      const app = new App({ name: "stock-ramp-hub", version: "1.0.0" });
+
+      const CURRENCY_SYMBOLS = { NGN: "₦", KES: "KSh", GHS: "₵", ZAR: "R", UGX: "USh" };
+
+      let currentTab = "buy"; // "buy" = reserve_sell_order flow, "sell" = reserve_buy_order flow
+      let rates = []; // one entry per (currency, mint) pair -- never merged across stocks
+      let activeOrder = null;
+      let supabase = null;
+      let channel = null;
+      let pollTimer = null;
+      let reserveState = null;
+      let settled = false;
+
+      function renderRates() {
+        const list = document.getElementById("ratesList");
+        if (!rates.length) {
+          list.innerHTML = `<div class="empty-rates">No live liquidity right now.</div>`;
+        } else {
+          list.innerHTML = rates
+            .map((r) => {
+              const sym = CURRENCY_SYMBOLS[r.currency] ?? r.currency;
+              const sellVal = r.bestSellOrderRate != null ? `${sym}${r.bestSellOrderRate.toLocaleString()}` : "—";
+              const buyVal = r.bestBuyOrderRate != null ? `${sym}${r.bestBuyOrderRate.toLocaleString()}` : "—";
+              return `<div class="rate-row">
+                <span class="cur">${r.symbol}<span class="cur-fiat">${r.currency}</span></span>
+                <span class="val sell"><span class="lbl">Buy @</span>${sellVal}</span>
+                <span class="val buy"><span class="lbl">Sell @</span>${buyVal}</span>
+              </div>`;
+            })
+            .join("");
+        }
+        populateCurrencySelect();
+      }
+
+      // Does this rate row have liquidity on the side the current tab needs?
+      // Buy tab needs an open SELL order to reserve from; Sell tab needs an open BUY order.
+      function hasLiquidityForTab(r) {
+        return currentTab === "buy" ? r.sellOrdersOnline > 0 : r.buyOrdersOnline > 0;
+      }
+
+      function populateCurrencySelect() {
+        const select = document.getElementById("currencySelect");
+        const relevant = rates.filter(hasLiquidityForTab);
+        const currencies = [...new Set(relevant.map((r) => r.currency))];
+        const prev = select.value;
+        select.innerHTML = currencies.length
+          ? currencies.map((c) => `<option value="${c}">${c}</option>`).join("")
+          : `<option value="">No liquidity</option>`;
+        if (currencies.includes(prev)) select.value = prev;
+        populateAssetSelect();
+      }
+
+      // Stock dropdown is scoped to the currently chosen currency AND the
+      // current tab's side -- this is the fix: a stock never shows up
+      // paired with a price that actually came from a different stock.
+      function populateAssetSelect() {
+        const currencySelect = document.getElementById("currencySelect");
+        const assetSelect = document.getElementById("assetSelect");
+        const currency = currencySelect.value;
+        const relevant = rates.filter((r) => r.currency === currency && hasLiquidityForTab(r));
+        const prev = assetSelect.value;
+        assetSelect.innerHTML = relevant.length
+          ? relevant.map((r) => `<option value="${r.mint}">${r.symbol}</option>`).join("")
+          : `<option value="">No liquidity</option>`;
+        if (relevant.some((r) => r.mint === prev)) assetSelect.value = prev;
+        onFormChanged();
+      }
+
+      function setTab(tab) {
+        currentTab = tab;
+        document.getElementById("tabBuy").dataset.active = String(tab === "buy");
+        document.getElementById("tabSell").dataset.active = String(tab === "sell");
+        document.getElementById("amountLabel").textContent = tab === "buy" ? "Token amount" : "Token amount to sell";
+        document.getElementById("sellFields").hidden = tab === "buy";
+        document.getElementById("summaryLabel").textContent = tab === "buy" ? "You'll pay" : "You'll receive";
+        activeOrder = null;
+        populateCurrencySelect();
+      }
+
+      async function onFormChanged() {
+        const currency = document.getElementById("currencySelect").value;
+        const mint = document.getElementById("assetSelect").value;
+        const amountStr = document.getElementById("amountInput").value;
+        const amount = parseFloat(amountStr);
+        const submitBtn = document.getElementById("submitBtn");
+        const summaryRow = document.getElementById("summaryRow");
+        const formError = document.getElementById("formError");
+        formError.hidden = true;
+
+        if (!currency || !mint) { submitBtn.disabled = true; submitBtn.textContent = "No liquidity for this side yet"; summaryRow.hidden = true; return; }
+        if (!amount || amount <= 0) { submitBtn.disabled = true; submitBtn.textContent = "Enter an amount"; summaryRow.hidden = true; return; }
+
+        try {
+          const response = await app.callServerTool({
+            name: "hub_find_best_order",
+            arguments: { orderType: currentTab === "buy" ? "sell" : "buy", currency, mint },
+          });
+          const result = response?.structuredContent;
+          if (!result?.found) {
+            activeOrder = null;
+            submitBtn.disabled = true;
+            submitBtn.textContent = "No matching order found";
+            summaryRow.hidden = true;
+            return;
+          }
+          if (amount > result.availableAmount) {
+            activeOrder = null;
+            submitBtn.disabled = true;
+            formError.hidden = false;
+            formError.textContent = `Only ${result.availableAmount} tokens available on the best order.`;
+            summaryRow.hidden = true;
+            return;
+          }
+
+          activeOrder = result;
+          const fiat = amount * result.pricePerToken;
+          const sym = CURRENCY_SYMBOLS[currency] ?? currency;
+          document.getElementById("summaryValue").textContent = `${sym}${fiat.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+          summaryRow.hidden = false;
+
+          const bankFilled =
+            currentTab === "buy" ||
+            (document.getElementById("bankCodeInput").value.trim() &&
+              document.getElementById("accountNumberInput").value.trim() &&
+              document.getElementById("beneficiaryInput").value.trim());
+
+          submitBtn.disabled = !bankFilled;
+          submitBtn.textContent = bankFilled ? (currentTab === "buy" ? "Reserve — generate QR" : "Sell — generate QR") : "Fill in bank details";
+        } catch (err) {
+          console.warn("rate lookup failed", err);
+          submitBtn.disabled = true;
+          submitBtn.textContent = "Couldn't check liquidity";
+        }
+      }
+
+      async function handleSubmit() {
+        if (!activeOrder) return;
+        const amount = parseFloat(document.getElementById("amountInput").value);
+        const submitBtn = document.getElementById("submitBtn");
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Generating…";
+
+        try {
+          if (currentTab === "buy") {
+            const response = await app.callServerTool({
+              name: "hub_reserve_sell_order",
+              arguments: { orderAddress: activeOrder.orderAddress, amount },
+            });
+            enterStatusView("buy", response?.structuredContent);
+          } else {
+            const payoutDetails = {
+              accountNumber: document.getElementById("accountNumberInput").value.trim(),
+              bankCode: document.getElementById("bankCodeInput").value.trim(),
+              bankName: document.getElementById("bankNameInput").value.trim(),
+              beneficiaryName: document.getElementById("beneficiaryInput").value.trim(),
+            };
+            const response = await app.callServerTool({
+              name: "hub_reserve_buy_order",
+              arguments: { orderAddress: activeOrder.orderAddress, amount, payoutDetails },
+            });
+            enterStatusView("sell", response?.structuredContent);
+          }
+        } catch (err) {
+          console.warn("reservation failed", err);
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Something went wrong — try again";
+        }
+      }
+
+      function enterStatusView(kind, data) {
+        if (!data) return;
+        settled = false;
+        reserveState = { ...data, kind };
+
+        document.getElementById("view-home").style.display = "none";
+        document.getElementById("view-status").style.display = "block";
+
+        // Fresh reservation -- make sure the QR/actions row from a
+        // previously-settled reservation in this same card session are
+        // visible again, and the receipt link/status button are reset.
+        document.getElementById("qrWrap").style.display = "flex";
+        document.getElementById("actionsRow").style.display = "flex";
+        const receiptLinkReset = document.getElementById("receiptLink");
+        receiptLinkReset.hidden = true;
+        receiptLinkReset.classList.remove("cta");
+        const refreshBtnReset = document.getElementById("refreshStatusBtn");
+        refreshBtnReset.disabled = false;
+        refreshBtnReset.textContent = "Check now";
+
+        document.getElementById("qrImage").src = data.qrCodeDataUri ?? "";
+        document.getElementById("tokenLabel").textContent = data.tokenAmount ? `${data.tokenAmount} token${data.tokenAmount === 1 ? "" : "s"}` : "—";
+        document.getElementById("fiatLabel").textContent = data.fiatAmount && data.currency ? `≈ ${data.currency} ${data.fiatAmount}` : "—";
+
+        if (kind === "buy") {
+          document.getElementById("detailRow1Label").textContent = "Order";
+          document.getElementById("detailRow1Value").textContent = data.orderAddress ? `${data.orderAddress.slice(0, 4)}…${data.orderAddress.slice(-4)}` : "—";
+          document.getElementById("detailRow2Label").textContent = "Reference";
+          document.getElementById("detailRow2Value").textContent = data.payoutReference ?? "—";
+          setStatus("pending", "Scan to reserve");
+          document.getElementById("statusHint").textContent = "Scan with Phantom or Backpack to lock in this reservation — nothing else needed from you.";
+          startPollingForPaymentLink();
+        } else {
+          document.getElementById("detailRow1Label").textContent = "Payout to";
+          document.getElementById("detailRow1Value").textContent = data.payoutDetails?.beneficiaryName ?? "—";
+          document.getElementById("detailRow2Label").textContent = "Bank";
+          document.getElementById("detailRow2Value").textContent = data.payoutDetails?.bankName ?? "—";
+          setStatus("pending", "Scan to sell");
+          document.getElementById("statusHint").textContent = "Scan to sign. This moves your tokens into escrow immediately — fiat pays out automatically.";
+          subscribeToReceipt(data.orderAddress);
+        }
+      }
+
+      function setStatus(state, label) {
+        const pill = document.getElementById("statusPill");
+        pill.dataset.state = state;
+        pill.textContent = label;
+      }
+
+      function startPollingForPaymentLink() {
+        if (pollTimer) return;
+        pollTimer = setInterval(checkPaymentLink, 4000);
+        checkPaymentLink();
+      }
+
+      async function checkPaymentLink() {
+        if (!reserveState?.payoutReference || reserveState.paymentLinkUrl) return;
+        try {
+          const response = await app.callServerTool({ name: "hub_get_payment_link", arguments: { payoutReference: reserveState.payoutReference } });
+          const result = response?.structuredContent;
+          if (result?.found) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            reserveState.paymentLinkUrl = result.linkUrl;
+            setStatus("awaiting", "Reservation confirmed — tap to pay");
+            document.getElementById("statusHint").textContent = "Open the payment link to send the fiat amount.";
+            const payBtn = document.getElementById("payNowBtn");
+            payBtn.hidden = false;
+            payBtn.dataset.url = result.linkUrl;
+            subscribeToReceipt(reserveState.orderAddress);
+          }
+        } catch (err) {
+          console.warn("payment link poll failed", err);
+        }
+      }
+
+      async function ensureSupabase() {
+        if (supabase) return supabase;
+        const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm");
+        if (reserveState?.supabaseUrl && reserveState?.supabaseAnonKey) {
+          supabase = createClient(reserveState.supabaseUrl, reserveState.supabaseAnonKey);
+        }
+        return supabase;
+      }
+
+      async function subscribeToReceipt(orderAddress) {
+        if (!orderAddress || channel) return;
+        const client = await ensureSupabase();
+        if (!client) return;
+
+        channel = client
+          .channel(`hub-receipt-insert-${orderAddress}`)
+          .on(
+            "postgres_changes",
+            { event: "INSERT", schema: "public", table: "receipts", filter: `trust_express_address=eq.${orderAddress}` },
+            (payload) => {
+              const amountMatches = Number(payload.new?.fiat_amount) === Number(reserveState?.fiatAmount) && payload.new?.currency === reserveState?.currency;
+              if (!amountMatches) return;
+              showReceipt(payload.new);
+            }
+          )
+          .subscribe();
+      }
+
+      function showReceipt(row) {
+        settled = true;
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        setStatus("success", reserveState?.kind === "buy" ? "✅ Paid" : "✅ Paid out");
+        document.getElementById("statusHint").textContent =
+          reserveState?.kind === "buy" ? "Payment confirmed. Tokens are on their way to your wallet." : "Sale confirmed. Fiat has been sent to your bank account.";
+
+        // Nothing left to scan, pay, or poll for once settled -- collapse
+        // the QR and the action row so the card reads as a summary rather
+        // than an interface stuck mid-flow.
+        document.getElementById("qrWrap").style.display = "none";
+        document.getElementById("actionsRow").style.display = "none";
+
+        const refreshBtn = document.getElementById("refreshStatusBtn");
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = "Settled";
+
+        const link = document.getElementById("receiptLink");
+        const base = reserveState?.publicBaseUrl;
+        if (base && row?.id) {
+          link.dataset.receiptUrl = `${base.replace(/\/$/, "")}/receipts/${row.id}`;
+          link.hidden = false;
+          link.classList.add("cta");
+        }
+        if (channel) supabase.removeChannel(channel);
+        channel = null;
+      }
+
+      /**
+       * Best-effort clipboard write. The async Clipboard API is frequently
+       * denied inside a sandboxed MCP-app iframe (no clipboard-write
+       * permission), so fall back to the legacy execCommand("copy") path,
+       * which works off a user gesture without needing that permission.
+       * Never throws; resolves to true/false.
+       */
+      async function copyText(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch {
+          // fall through to the legacy path
+        }
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          const ok = document.execCommand("copy");
+          document.body.removeChild(ta);
+          return ok;
+        } catch {
+          return false;
+        }
+      }
+
+      // Hands a link to the host to open (which shows the host's "Open
+      // external link" confirm dialog). Falls back to copying the link if the
+      // host can't or won't open it, and only reports failure if that fails
+      // too. Every branch restores the button label so it never gets stuck.
+      async function openExternal(url, btn, opts = {}) {
+        if (!url) return;
+        const original = btn.textContent;
+
+        if (app.getHostCapabilities()?.openLinks) {
+          try {
+            const { isError } = await app.openLink({ url });
+            if (!isError) return;
+          } catch {
+            // fall through to clipboard
+          }
+        }
+
+        const copied = await copyText(url);
+        btn.textContent = copied
+          ? (opts.copiedFallbackLabel ?? "Couldn't open — link copied instead")
+          : "Couldn't open link";
+        setTimeout(() => (btn.textContent = original), 2000);
+      }
+
+      function resetToHome() {
+        settled = false;
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        if (channel && supabase) { supabase.removeChannel(channel); channel = null; }
+        reserveState = null;
+        document.getElementById("payNowBtn").hidden = true;
+        document.getElementById("receiptLink").hidden = true;
+        document.getElementById("receiptLink").classList.remove("cta");
+        document.getElementById("amountInput").value = "";
+        document.getElementById("view-status").style.display = "none";
+        document.getElementById("view-home").style.display = "block";
+        refreshRates();
+      }
+
+      async function refreshRates() {
+        try {
+          const response = await app.callServerTool({ name: "hub_refresh_rates", arguments: {} });
+          rates = response?.structuredContent?.rates ?? [];
+          renderRates();
+        } catch (err) {
+          console.warn("rate refresh failed", err);
+        }
+      }
+
+      app.ontoolresult = (result) => {
+        rates = result.structuredContent?.rates ?? [];
+        renderRates();
+      };
+
+      document.getElementById("tabBuy").addEventListener("click", () => setTab("buy"));
+      document.getElementById("tabSell").addEventListener("click", () => setTab("sell"));
+      document.getElementById("currencySelect").addEventListener("change", populateAssetSelect);
+      document.getElementById("assetSelect").addEventListener("change", onFormChanged);
+      document.getElementById("amountInput").addEventListener("input", onFormChanged);
+      ["bankNameInput", "bankCodeInput", "accountNumberInput", "beneficiaryInput"].forEach((id) =>
+        document.getElementById(id).addEventListener("input", onFormChanged)
+      );
+      document.getElementById("submitBtn").addEventListener("click", handleSubmit);
+      document.getElementById("refreshRatesBtn").addEventListener("click", refreshRates);
+      document.getElementById("backToHomeBtn").addEventListener("click", resetToHome);
+
+      // Same path as "View full receipt": host openLink first, clipboard only
+      // as a last resort.
+      document.getElementById("copyLinkBtn").addEventListener("click", (e) =>
+        openExternal(reserveState?.checkoutPageUrl, e.currentTarget)
+      );
+
+      document.getElementById("payNowBtn").addEventListener("click", (e) => openExternal(e.target.dataset.url, e.target));
+      document.getElementById("receiptLink").addEventListener("click", (e) => openExternal(e.target.dataset.receiptUrl, e.target));
+
+      document.getElementById("refreshStatusBtn").addEventListener("click", async () => {
+        if (!reserveState?.orderAddress || settled) return;
+        if (reserveState.kind === "buy" && !reserveState.paymentLinkUrl) { await checkPaymentLink(); return; }
+        try {
+          const response = await app.callServerTool({
+            name: "hub_get_receipt",
+            arguments: { orderAddress: reserveState.orderAddress, fiatAmount: reserveState.fiatAmount, currency: reserveState.currency },
+          });
+          const receiptCheck = response?.structuredContent;
+          if (receiptCheck?.found) showReceipt(receiptCheck.receipt);
+        } catch (err) {
+          console.warn("manual receipt check failed", err);
+        }
+      });
+
+      await app.connect();
+    </script>
+  </body>
+</html>
